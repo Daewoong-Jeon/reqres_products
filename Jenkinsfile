@@ -1,5 +1,4 @@
-pipeline {
-    agent any
+pipeline { agent any
 
     environment {
         REGISTRY = 'user13.azurecr.io'
@@ -9,15 +8,20 @@ pipeline {
         AKS_NAMESPACE = 'default'
         AZURE_CREDENTIALS_ID = 'Azure-Cred'
         TENANT_ID = '29d166ad-94ec-45cb-9f65-561c038e1c7a' // Service Principal 등록 후 생성된 ID
+        GIT_USER_NAME = 'daewoong-jeon'
+        GIT_USER_EMAIL = 'du0928@naver.com'
+        GITHUB_CREDENTIALS_ID = 'Github-Cred'
+        GITHUB_REPO = 'github.com/daewoong-jeon/reqres_products.git'
+        GITHUB_BRANCH = 'master' // 업로드할 브랜치
     }
- 
+    
     stages {
         stage('Clone Repository') {
             steps {
                 checkout scm
             }
         }
-        
+         
         stage('Maven Build') {
             steps {
                 withMaven(maven: 'Maven') {
@@ -34,25 +38,18 @@ pipeline {
             }
         }
         
-        stage('Azure Login') {
-            steps {
-                script {
-                    withCredentials([usernamePassword(credentialsId: env.AZURE_CREDENTIALS_ID, usernameVariable: 'AZURE_CLIENT_ID', passwordVariable: 'AZURE_CLIENT_SECRET')]) {
-                        sh 'az login --service-principal -u $AZURE_CLIENT_ID -p $AZURE_CLIENT_SECRET --tenant ${TENANT_ID}'
-                    }
-                }
-            }
-        }
-        
         stage('Push to ACR') {
             steps {
                 script {
                     sh "az acr login --name ${REGISTRY.split('\\.')[0]}"
                     sh "docker push ${REGISTRY}/${IMAGE_NAME}:v${env.BUILD_NUMBER}"
+             
                 }
             }
         }
-        
+    
+       
+         
         stage('CleanUp Images') {
             steps {
                 sh """
@@ -61,19 +58,34 @@ pipeline {
             }
         }
         
-        stage('Deploy to AKS') {
+        stage('Update deploy.yaml') {
             steps {
                 script {
-                    sh "az aks get-credentials --resource-group ${RESOURCE_GROUP} --name ${AKS_CLUSTER}"
                     sh """
-                    sed 's/latest/v${env.BUILD_ID}/g' kubernetes/deploy.yaml > output.yaml
-                    cat output.yaml
-                    kubectl apply -f output.yaml
-                    kubectl apply -f kubernetes/service.yaml
-                    rm output.yaml
+                    sed -i 's|image: \"${REGISTRY}/${IMAGE_NAME}:.*\"|image: \"${REGISTRY}/${IMAGE_NAME}:v${env.BUILD_ID}\"|' kubernetes/deploy.yaml
+                    cat kubernetes/deploy.yaml
                     """
                 }
             }
         }
+        
+        stage('Commit and Push to GitHub') {
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: GITHUB_CREDENTIALS_ID, usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                        sh """
+                            git config --global user.email "your-email@example.com"
+                            git config --global user.name "Jenkins CI"
+    
+                            cp kubernetes/deploy.yaml repo/kubernetes/deploy.yaml
+                            cd repo
+                            git add kubernetes/deploy.yaml
+                            git commit -m "Update deploy.yaml with build ${env.BUILD_NUMBER}"
+                            git push origin ${GITHUB_BRANCH}
+                        """
+                    }
+                }
+            }
+        } 
     }
 }
